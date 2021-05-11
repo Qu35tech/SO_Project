@@ -64,7 +64,6 @@ int main(int argc, char* argv[]) {
     }
 
 
-
     // free alocated memory
     for(int i=0;i<NUM_FILTERS;i++) free(filters_location[i]);
     for(int i=0;i<NUM_FILTERS;i++) free(filters_name[i]);
