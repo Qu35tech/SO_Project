@@ -38,15 +38,25 @@ int fd_server;
 int val=0;
 int * pids;
 int pids_count=0;
-int * processos;
+int** processos;
 int proc=0;
+int tasks=0;
 
 
-
+//caso receba sigterm o pai espera pelos processos
 void graceful_handler(int signum){
-    for(int i = 0 ; i< pids_count;i++)
-    printf("Guardar dados");
+    int status;
+    for(int i = 0 ; i< pids_count;i++){
+        wait(&status);
+    }
+            
 }
+
+
+void endProcess_handler(int signum){
+    wait(NULL);
+}
+    
 
 
 
@@ -85,72 +95,129 @@ char** parseComando_transform(char* input, char** task){
 
 
 int executa(char* arg, int servpid){
-    
+    int ret;
     char** task = parseComando_transform(arg,task); //fazer
     int quantos = 0;
     for(int i = 0; task[i]!=NULL;i++){
         quantos++;
 
     }
-    
     int n_filters = quantos -3; //numero total de filtros
     pids_count = n_filters; //numero de processos igual a filtros
     int pipe_filters[n_filters-1][2]; //numero de pipes;
     int pid;
-
-    if(signal(SIGTERM, graceful_handler)==SIG_ERR){
-			perror("signal sigterm");
-            exit(-1);	
-	}
-        // task[3]                          task[1]                  task[2]
-    //../bin/aurrasd-filters/aurrasd-echo < ../samples/sample-1-so.m4a > output.mp3
-    if(n_filters == 1){//sem pipes
-            pids = (int*) malloc(sizeof(int)*n_filters);
-            if((pid = fork()==0)){
-                char* filter = strdup(task[3]);
-                //printf("%s\n",task[1]); 
-                //printf("%s\n",task[2]);
+    
 
 
-                int fi = open(task[1],O_RDONLY,S_IRWXU);
-                int fo = open(task[2],O_CREAT | O_WRONLY,S_IRWXU);
-                dup2(fi,1);
-                dup2(fo,0);
-                //criar string do comando para pudermos meter no execvp ou exclp
-                execlp(filter,filter,task[1],task[2],NULL);
-                exit(-1);
+    int fi = open(task[1],O_RDONLY,S_IRWXU);
+    int fo = open(task[2],O_CREAT | O_WRONLY,S_IRWXU);
+    
+    
+    if(n_filters == 1){//sem pipes                        //                           task[1]                task[2]   task[3]
+            int indice;                                   //./aurras transform ../samples/sample-1-so.m4a output3.mp3     eco
+            for(int i = 0; i<NUM_FILTERS;i++){
+                if(strcmp(task[3],filters_name[i])==0){
+                        indice = i;
+                        break;
+                }
             }
-            pids[0] = pid;
+
+            pids = (int*) malloc(sizeof(int)*n_filters);
+            if((pid = fork())==0){
+                dup2(fi,0);//stdin
+                dup2(fo,1);//stdout
+
+                int fd_server_executa = open("FIFO2",O_WRONLY);
+                char * processing=strdup("processing...\n");
+                write(fd_server_executa,processing,strlen(processing)+1); 
+                close(fd_server_executa);
+                /*
+                char exec[31] = "../bin/aurrasd-filters/aurrasd-";
+                //char* exec = strdup("../bin/aurrasd-filters/aurrasd-");
+                strcat(exec,task[3]); 
+                execl(exec,exec,NULL);
+                */
+               execl(filters_location[indice],filters_location[indice],NULL);
+
+                perror("execl com 1 filtro");
+                _exit(-1);
+            }
+              pids[0] = pid;
+              ret = 0;
+
+            
+
     }else{
-        //bin/aurrasd-filters/aurrasd-echo < samples/sample-1-so.m4a | bin/aurrasd-filters/aurrasd-tempo-half > output.mp3
+        //                           task[1]                task[2]   task[3]   task[4]
+        //./aurras transform ../samples/sample-1-so.m4a output3.mp3 tempo-half   echo
+        
         pids = (int*) malloc(sizeof(int)*n_filters);
-        for(int i=0; i< n_filters;i++){
+        int j = 2; //indice do qual começam os filters
+     for(int i=0; i< n_filters;i++){
+
             if(i==0){//primeiro comando
+                
                 if(pipe(pipe_filters[i]) == -1){ //criamos o pipe 
                    perror("pipe[0]");
-                   exit(-1); 
+                   exit(1); 
                 }
+                j++;
+
+                int indice;                                   
+                for(int i = 0; i<NUM_FILTERS;i++){
+                    if(strcmp(task[j],filters_name[i])==0){
+                        indice = i;
+                        break;
+                    }
+                }
+
+                //0 -> stdin
+                //1 -> stdout
                 if((pid = fork()) == 0){
                     close(pipe_filters[i][0]);
-                    dup2(pipe_filters[i][1],1); //descritor de escrita para o stdout de grep
+                    dup2(fi,0);
+                    
+                    dup2(pipe_filters[i][1],1); //descritor de escrita para o stdout 
                     close(pipe_filters[i][1]);
-                    //criar string do comando para pudermos meter no execp ou execlp
-                    //execlp ou execvp
-                    //_exit(1);
+                    
+                    
+                    //char exec[60] = "../bin/aurrasd-filters/aurrasd-";
+                    //strcat(exec,task[j]);
+                    //execl(exec,exec,NULL);
+                    execl(filters_location[indice],filters_location[j],NULL);
+                    
+                    _exit(1);
                 }
                 close(pipe_filters[i][1]);
     
     
             }
 
-            if(i == n_filters-1){//último comando
-                //não necessito de criar pipe, apenas dirigimos o descritoe de leitura do último pipe para stdin
+            else if(i == n_filters-1){//último comando
+                //não necessito de criar pipe, apenas dirigimos o descritor de leitura do último pipe para stdin
+                j++;
+                int indice;                                   
+                for(int i = 0; i<NUM_FILTERS;i++){
+                    if(strcmp(task[j],filters_name[i])==0){
+                        indice = i;
+                        break;
+                    }
+                }
                 if((pid = fork()) == 0){
+                    
                     dup2(pipe_filters[i-1][0],0);
                     close(pipe_filters[i-1][0]);
-                    //criar string do comando para pudermos meter no execp ou execlp
-                    //execlp ou execvp
-                    //_exit(1);
+                    dup2(fo,1);
+                    //char exec[60] = "../bin/aurrasd-filters/aurrasd-";                    
+                    //strcat(exec,task[j]);
+                    //execl(exec,exec,NULL);
+                    int fd_server_executa = open("FIFO2",O_WRONLY);
+                    char * processing=strdup("processing...\n");
+                    write(fd_server_executa,processing,strlen(processing)+1); 
+                    close(fd_server_executa);
+                    execl(filters_location[indice],filters_location[j],NULL);
+                    
+                    _exit(1);
                 }
                 close(pipe_filters[i-1][0]);
             
@@ -158,37 +225,46 @@ int executa(char* arg, int servpid){
                 //comandos intermédios
                 if(pipe(pipe_filters[i]) == -1){ //criamos o pipe 
                    perror("pipe_filters[i]");
-                   _exit(-1); 
+                   exit(-1); 
                 }
-
-
+                j++;
+                int indice;                                   
+                for(int i = 0; i<NUM_FILTERS;i++){
+                    if(strcmp(task[j],filters_name[i])==0){
+                        indice = i;
+                        break;
+                    }
+                }
                 if((pid = fork()) == 0){
-                    close(pipe_filters[i][0]);
+                    
                     dup2(pipe_filters[i-1][0],0);
-                    close(pipe_filters[i-1][0]);
                     dup2(pipe_filters[i][1],1);
+                    close(pipe_filters[i-1][0]);
                     close(pipe_filters[i][1]);
-                    //criar string do comando para pudermos meter no execp ou execlp
-                    //execlp ou execvp
-                    //_exit(1);
+                    
+                    //char exec[60] = "../bin/aurrasd-filters/aurrasd-";
+                    //strcat(exec,task[j]);
+                    //execl(exec,exec,NULL);
+                    execl(filters_location[indice],filters_location[j],NULL);
+                    _exit(1);
                 }
 
                 close(pipe_filters[i-1][0]);
-                close(pipe_filters[i][0]);
+                close(pipe_filters[i][1]);
 
             }
             pids[i] = pid;
 
-        }
-
-        
-    }
+     }
+    }   
+    close(fi);
+    close(fo);
     int status;
 	for(int i=0;i<n_filters;i++){
 		wait(&status);
-		if(WIFEXITED(status)==0) val=-1;
+		if(WIFEXITED(status)==0) ret=-1;
 	}
-    printf("CHEGOU AQUII\n");
+    
     return val;
 }
 
@@ -245,13 +321,21 @@ int main(int argc, char* argv[]) {
         filters_location[i] = strdup(aux);
     }
 
-    /*CRIAR HANDLER PARA NÃO DEIXAR QUE MAIS CLIENTES ACEDAM AO SISTEMA 
-    GUARDA PIDS QUE ESTEJAM ATIVOS PARA OS DEIXAR ACABAR???
-    */
+    //printf("%s\n",filters_name[0]);
+    //printf("%s\n",filters_name[1]);
+    //printf("%s\n",filters_name[2]);
+    //printf("%s\n",filters_name[3]);
+    //printf("%s\n",filters_name[4]);
+
+
+
+    /*CRIAR HANDLER PARA NÃO DEIXAR QUE MAIS CLIENTES ACEDAM AO SISTEMA */
     if(signal(SIGTERM, graceful_handler)==SIG_ERR){
-        perror("signal SIGCHLDERRO");  
+        perror("signal SIGTERM ERRO");  
         exit(3);
     }
+
+    
      
     
 
@@ -263,13 +347,12 @@ int main(int argc, char* argv[]) {
     //servidor -> client
     mkfifo("/tmp/FIFO2",0666);
     char buffer[1024];
-    
     int servidor_pid = getpid();
     int data;
     while (1){
         fd_client = open("/tmp/FIFO",O_RDONLY);
         while((data = read(fd_client,buffer,1024)) > 0) {
-        
+    
             //write(STDOUT_FILENO,buffer,data);
             char * guarda = strdup(buffer);
             pids_count++;
@@ -281,22 +364,28 @@ int main(int argc, char* argv[]) {
             }
 
             //Um ouvido para cada cliente - processo para cada cliente
-            switch(fork()){
-             case -1:
-                perror("fork FAILED");
-                _exit(-1);
             
-             case 0:
-                close(pipe_paiFilho[0]); //fechamos de leitura 
-    		    int pid;
-    	        int status;
-                printf("%s\n",buffer);
-                if(strcmp(buffer,"status") == 0){
+              
+            if(strcmp(buffer,"status") == 0){
+                
+                switch(fork()){
+                 case -1:
+                    perror("fork status FAILED");
+                    _exit(-1);
+                    break;
+            
+                 case 0:
+                 {
+                    //fechamos de leitura
+                    close(pipe_paiFilho[0]);
+                    
                     //ir buscar todas as task ainda em execucao em processos?
                     //write(pip_paiFilho[1],processos);
                     //ir buscar todos os filtros os valores de current e max
+                    
                     char** filtros_stat = malloc(sizeof(char*) * NUM_FILTERS);
                     for(int i=0; i< NUM_FILTERS ;i++){
+                        write(1,"aqui\n",5);
                         char FILTER[1024];
                         char number1[10];
                         char number2[10];
@@ -310,51 +399,101 @@ int main(int argc, char* argv[]) {
                         strcat(FILTER,number2);
                         strcat(FILTER,"\n");
                         strcpy(filtros_stat[i],FILTER);
+                       
+                        write(1,filtros_stat[i],strlen(filtros_stat[i])+1);
                     }
+
+                    
                     //strcat(processos,filtros_stat);
-                    //write(pip_paiFilho[1],processos);
-                    //_exit(0);
+                    int i;
+                    while(filtros_stat[i]!=NULL){
+                        write(pipe_paiFilho[1],filtros_stat[i],strlen(filtros_stat[i])+1);
+                    }
+                    _exit(0);
+                 }
+                 default:
+                        close(pipe_paiFilho[1]);
+                        char** tarefa = malloc(sizeof(char*)*pids_count); //vamos ter de multiplicar consoante o numero de processos que temos
+                        int i=0;
+                        char buf[1024];
+                        while(( data = read(pipe_paiFilho[0],&buf,1024)) > 0){ //escrevo para o pipe_paiFilho os dados que os processos filhos lhe vão mandando
+                            tarefa[i]=strdup(buf);
+                            i++;
+                        }  
+                        proc++; //VER SE PRECISO??
+                        close(pipe_paiFilho[0]);
+                        tasks=0;
+                        //fd_server = open("FIFO2",O_WRONLY);
+                        //write(fd_server,tarefa,1024);
+                        printf("o zat?");
+                        free(tarefa);
+                        break;
 
+                }
                 
-                }else{//saber o numero de filtros - 
+            }else{//transform
+                  if((fd_server=open("FIFO2",O_WRONLY))<0){
+                    perror("open");
+                  }
+                  switch(fork()){
+                     case -1:
+                        perror("fork transform FAILED");
+                        _exit(-1);
+                        break;
+                
+                     case 0:
+                      {
+                        char number[20];
+                        tasks++;
+                        char * TASKPID = malloc(sizeof(char*) * 24);
+                        char * pending=strdup("pending...\n");
+                        write(fd_server,pending,strlen(pending)+1);
+                        strcat(TASKPID, "task #");
+                        sprintf(number,"%d",tasks);
+                        strcat(TASKPID, number);
+                        strcat(TASKPID,": ");
+                        strcat(TASKPID,guarda);
+                        strcat(TASKPID, "\n");    //SAVE TASK TO PAI  - EXEMPLO:task #3: transform|input-filename|output-filename|filter-id-1|filter-id-1
+                        write(pipe_paiFilho[1],TASKPID,strlen(TASKPID));
+                        free(TASKPID);
+                        close(pipe_paiFilho[1]);         
+                          
+                        
+                        int suc = executa(buffer,servidor_pid); //PERGUNTAR CARLOS SE POSSO FAZER COM QUE ESTE LEVE O PID DELE PARA ADICIONAR AOS PROCESSOS EM ANDAMENTO
+                        if(suc == 0) write(1,"Task realizada com sucesso\n",28);  //task com sucesso
+                        if(suc == -1) write(1,"Task realizada com insucesso\n",30); //task sem sucesso
+                        _exit(0);
+                      }
+                      break;
 
-                    char  TASKPID[1024];
-                    char  number[20];
-                    strcat(TASKPID, "task #");
-                    sprintf(number,"%d",pids_count);
-                    strcat(TASKPID, number);
-                    strcat(TASKPID,": ");
-                    strcat(TASKPID,guarda);
-                    strcat(TASKPID, "\n");    //SAVE TASK TO PAI  - EXEMPLO:task #3: transform|input-filename|output-filename|filter-id-1|filter-id-1
-                    write(pipe_paiFilho[1],TASKPID,strlen(TASKPID));
-
-                    close(pipe_paiFilho[1]);
-                    int suc = executa(buffer,servidor_pid);
-                    if(suc == 0) write(1,"Task realizada com sucesso\n",28);  //task com sucesso
-                    if(suc == -1) write(1,"Task realizada com insucesso\n",30); //task sem sucesso
-                    exit(1);
+             
+                     default: //processo pai não vai esperar pelos filhos para criar concorrência 
+                        close(pipe_paiFilho[1]);
+                        char** tarefa = malloc(sizeof(char*)*pids_count); //vamos ter de multiplicar consoante o numero de processos que temos
+                        int i=0;
+                        char buf[1024];
+                        while(( data = read(pipe_paiFilho[0],&buf,1024)) > 0){ //escrevo para o pipe_paiFilho os dados que os processos filhos lhe vão mandando
+                            tarefa[i]=strdup(buf);
+                            
+                            i++;
+                        }  
+                        proc++;
+                        close(pipe_paiFilho[0]);
+                        wait(NULL);//para não ficar com zombies
+                        char* termina = strdup("termina");
+                        write(fd_server,termina,strlen(termina)+1);
+                        close(fd_server);
+                        tasks=0;
+                        close(fd_client);
+                        
+                        break;
+                  } 
+            
+         
                 }
 
-            
-             default:
-                close(pipe_paiFilho[1]);
-                char** tarefa = malloc(sizeof(char*)*pids_count); //vamos ter de multiplicar consoante o numero de processos que temos
-                int i=0;
-                char buf[1024];
-                while(( data = read(pipe_paiFilho[0],&buf,1)) > 0){ //escrevo para o STDOUT os dados que os processos filhos lhe vão mandando
-                    tarefa[i]=strdup(buf);
-                    i++;
-                }
-                proc++;
-                close(pipe_paiFilho[0]);
-            
-            }
-            
-         }
+        }
     }
-    close(fd_client);
-
-
     for(int i=0;i<NUM_FILTERS;i++) free(filters_location[i]);
     for(int i=0;i<NUM_FILTERS;i++) free(filters_name[i]);
     return 0;

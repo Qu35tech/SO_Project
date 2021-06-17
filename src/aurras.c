@@ -74,10 +74,10 @@ int main(int argc, char* argv[]) {
     
     //client -> servidor
     int fd_client;
-    
     //servidor -> client
     int fd_server;
     int data;
+    int pid;
     char *output_type;
     char buffer[1024];
 
@@ -88,25 +88,35 @@ int main(int argc, char* argv[]) {
     
     } else {
         
-        if(fork() == 0){
+        if((pid=fork())==0){
             if((fd_client=open("/tmp/FIFO",O_WRONLY))<0){
 						perror("open");
 		    }
             char* output_type = strcat_agrv(argc,argv);	
-            //printf("%s\n",output_type);	
             write(fd_client,output_type,strlen(output_type)+1);
+            close(fd_client);
+            _exit(0);
+        
         }
-        //vou escrever para o servidor que necessito : se status ou um transform
-         // usage historic information  
+        wait(NULL);
         fd_server = open("FIFO2",O_RDONLY);
     	char * resposta = (char*) malloc(sizeof(1024));
-    	while(1){
-			while((data = read(fd_server,resposta,1024)) > 0) {
+    	while((data = read(fd_server,resposta,1024)) > 0) {
+                if(strcmp(resposta,"termina")==0){
+                    write(1,"Finished\n",9);
+                    break;
+                }else{
                     write(1,resposta,data);
-			}
-    	}
+                }
+		}
+        close(fd_server);
+        exit(0);	
         
-
+    
     }
+    
+    
+
+    
     return 0;
 }
